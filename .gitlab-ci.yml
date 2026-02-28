@@ -1,0 +1,48 @@
+stages:
+  - dependency_update
+
+# Dependency Update Job -------------------------------------------------
+dependency_update:
+  image: ruby:3.3
+  stage: dependency_update
+  before_script:
+    # Install dependencies
+    - apt-get update && apt-get install -y git curl openssh-client
+    # Install Node.js 22.15.0
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    - apt-get install -y nodejs=22.15.0-1nodesource1
+    # Setup SSH authentication
+    - echo "🔐 Setting up SSH authentication"
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    # Write SSH key to file securely (avoiding echo in logs)
+    - printf "%s\n" "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - ssh-add ~/.ssh/id_rsa
+    - ssh-keyscan -H gitlab.com >> ~/.ssh/known_hosts
+    - git remote set-url origin git@$CI_SERVER_HOST:$CI_PROJECT_PATH.git
+    - git config user.email "$DEPENDABOT_EMAIL"
+    - git config user.name "Dependabot[bot]"
+    # Setup script dependencies
+    - echo "🔍 Checking for newer gem versions..."
+    - echo "📋 Current pinned versions - dependabot-omnibus:0.330.0"
+    - echo "📋 Latest available versions:"
+    - echo "   - dependabot-omnibus:" $(gem list --remote --exact dependabot-omnibus | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 || echo 'unknown')
+    - gem install dependabot-omnibus:0.330.0 --no-document
+
+  script:
+    - ruby dependabot_with_ai.rb
+  after_script:
+    # Clean up SSH private key for security
+    - echo "🧹 Cleaning up SSH private key..."
+    - rm -f ~/.ssh/id_rsa
+    - ssh-add -D 2>/dev/null || true
+  variables:
+    TARGET_BRANCH: $TARGET_BRANCH || "dev"
+    OPENROUTER_API_KEY: $OPENROUTER_API_KEY
+    AI_ANALYSIS_MODEL: $AI_ANALYSIS_MODEL || "anthropic/claude-sonnet-4"
+    MR_ASSIGNEE_USERNAME: ""
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $DEPENDABOT_UPDATE == "true"
+  allow_failure: true
